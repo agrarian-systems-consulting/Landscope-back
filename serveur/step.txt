@@ -1,0 +1,140 @@
+DEBIAN 10
+
+apt update
+apt upgrade
+
+#Installation de Tomcat
+
+sudo apt install default-jdk
+sudo useradd -m -U -d /opt/tomcat -s /bin/false tomcat
+
+cd /tmp
+wget https://www-us.apache.org/dist/tomcat/tomcat-9/v9.0.34/bin/apache-tomcat-9.0.34.tar.gz
+tar -xf apache-tomcat-9.0.34.tar.gz
+sudo mv apache-tomcat-9.0.34 /opt/tomcat/
+
+sudo chown -R tomcat:/opt/tomcat
+sudo sh -c 'chmod +x /opt/tomcat/bin/*.sh'
+sudo nano /etc/systemd/system/tomcat.service
+
+#copier
+
+[Unit]
+Description=Tomcat 9.0 servlet container
+After=network.target
+
+[Service]
+Type=forking
+
+User=tomcat
+Group=tomcat
+
+Environment="JAVA_HOME=/usr/lib/jvm/default-java"
+Environment="JAVA_OPTS=-Djava.security.egd=file:///dev/urandom"
+
+Environment="CATALINA_BASE=/opt/tomcat"
+Environment="CATALINA_HOME=/opt/tomcat"
+Environment="CATALINA_PID=/opt/tomcat/temp/tomcat.pid"
+Environment="CATALINA_OPTS=-Xms512M -Xmx1024M -server -XX:+UseParallelGC"
+Environment="CATALINA_OPTS=-XX:SoftRefLRUPolicyMSPerMB=36000"
+Environment="CATALINA_OPTS=-XX:-UsePerfData"
+Environment="CATALINA_OPTS=-Dorg.geotools.referencing.forceXY=true "
+Environment="CATALINA_OPTS=-Dorg.geotoools.render.lite.scale.unitCompensation=true"
+
+ExecStart=/opt/tomcat/bin/startup.sh
+ExecStop=/opt/tomcat/bin/shutdown.sh
+
+[Install]
+WantedBy=multi-user.target
+
+sudo systemctl daemon-reload
+sudo systemctl start tomcat
+sudo ufw allow 8080
+
+#tester http://<ip>:8080
+
+cd /tmp
+wget http://sourceforge.net/projects/geoserver/files/GeoServer/2.17.0/geoserver-2.17.0-war.zip
+sudo apt-get install unzip
+unzip geoserver-2.70.0-war.zip geoserver.war
+sudo mv geoserver.war /opt/tomcat/webapps/
+
+#configuer le cross origin dans le fichier /opt/tomcat/web.xml de tomcat, ajouter :
+<filter>
+  <filter-name>CorsFilter</filter-name>
+  <filter-class>org.apache.catalina.filters.CorsFilter</filter-class>
+  <init-param>
+    <param-name>cors.allowed.origins</param-name>
+    <param-value>*</param-value>
+  </init-param>
+  <init-param>
+    <param-name>cors.allowed.methods</param-name>
+    <param-value>GET,POST,DELETE,HEAD,OPTIONS,PUT</param-value>
+  </init-param>
+  <init-param>
+    <param-name>cors.allowed.headers</param-name>
+    <param-value>Authorization,Content-Type,X-Requested-With,accept,Origin,Access-Control-Request-Method,Access-Control-Request-Headers</param-value>
+  </init-param>
+  <init-param>
+    <param-name>cors.exposed.headers</param-name>
+    <param-value>Access-Control-Allow-Origin,Access-Control-Allow-Credentials</param-value>
+  </init-param>
+  <init-param>
+    <param-name>cors.support.credentials</param-name>
+    <param-value>true</param-value>
+  </init-param>
+  <init-param>
+    <param-name>cors.preflight.maxage</param-name>
+    <param-value>10</param-value>
+  </init-param>
+</filter>
+<filter-mapping>
+  <filter-name>CorsFilter</filter-name>
+  <url-pattern>/*</url-pattern>
+</filter-mapping>
+
+sudo systemctl restart tomcat
+
+#tester http://<ip>:8080/geoserver
+
+#Installation de PostgreSQL
+sudo apt-get install postgresql postgresql-client 
+sudo apt-get install postgis postgresql-11-postgis-2.5 postgresql-11-postgis-2.5-scripts
+sudo ufw allow 5432
+
+#On modifie le fichier pg_hba.conf, ici on laisse toutes les IP se connecter à la base : 
+host    all             all             0.0.0.0/0            md5
+#On configure les IP pouvant se connecter sur postgresql.conf, on modifie la ligne : 
+listen_addresses = '*'
+/etc/init.d/postgresql restart
+
+# changement du md pour postgres
+su -c "psql" - postgres
+\password
+\quit
+
+# création d'un nouveau user
+sudo -u postgres createuser username
+# création d’une base de donnée
+sudo -u postgres createdb dbname
+# changement des droits pour le nouveau user
+sudo -u postgres psql
+psql=# alter user username with encrypted password 'password';
+GRANT ALL PRIVILEGES ON DATABASE dbname TO username;
+#coonnexion à la base de données puis permission
+GRANT ALL PRIVILEGES ON ALL TABLES IN SCHEMA public TO username;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT ALL ON TABLES TO username;
+GRANT USAGE ON ALL SEQUENCES IN SCHEMA public TO username;
+
+# ajouter les tables sql dans la bdd
+psql -U username -d dbname -a -f file.sql
+
+#Dans l'UI de GeoServer:
+1- changer les mots de passe maître et admin
+2- Créer un nouveau rôle : ROLE_WFS
+3- Créer un nouvel utilisateur : apf et mdp : 8hN5q7qmk3U5KX , on ajoute le rôle ROLE_WFS à l'utilisateur
+4- Sécurité du service : ajouter une nouvelle règle de service : Service wfs et Méthode *, ajouter le rôle ROLE_WFS.
+5- Ajouter un nouvel espace de travail : apf (avec un espace de nommage, important pour le WFS-T).
+6- Ajouter un nouvel entrepôt PostGIS avec les paramètres de la bdd créée et l'utilisateur créé
+7- Publier la couche projects 
+8- Sécurité des données, ajouter 2 nouvelle règles : espace de travail apf, layer projets et mode d'accès Lecture puis pour la seconde règle écriture, ajouter le rôle ROLE_WFS.
